@@ -12,7 +12,7 @@ ___
 ![examples1](./results/example-v1.gif)
 
 ### Real data
-![examples3](./results/example-v3.gif)
+![examples3](./results/example-v4.gif)
 
 
 ## Contact
