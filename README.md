@@ -16,16 +16,23 @@ pip install -r requirements.txt
 
 ```
 dataset
-  └─test
-      ├─blurred  
+  ├─test
+  │   ├─inputs  
+  │   │       000_00000001.png
+  │   │       ......   
+  │   └─event
+  │           000_00000001.npy
+  │           ......
+  └─train
+      ├─inputs
       │       000_00000001.png
+      │       ......     
+      ├─event
+      │       000_00000001.npy
       │       ......
-      ├─lr  
-      │       000_00000001.png
-      │       ......      
-      └─event
-              000_00000001.npy
-              ......                    
+      └─gt
+              000_00000001.png
+              ......               
 ```
 
 ## Train
@@ -37,7 +44,7 @@ python main.py --train --mode deblur
 ### SR
 ```shell
 python main.py --train --mode sr
-
+```
 
 ## Test
 
