@@ -4,7 +4,7 @@ import torch.nn as nn
 from .RDDB import *
 
 class SRNet(nn.Module):
-    def __init__(self, nf, nb, upscale=4):
+    def __init__(self, nf=128, nb=6, upscale=4):
         super(SRNet, self).__init__()
         self.nb = nb
         self.fea_conv = nn.Sequential(

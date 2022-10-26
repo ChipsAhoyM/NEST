@@ -13,49 +13,27 @@ ___
 pip install -r requirements.txt
 ```
 
-## Dataset Folder
-
-```
-dataset
-  ├─test
-  │   ├─inputs  
-  │   │       000_00000001.png
-  │   │       ......   
-  │   └─event
-  │           000_00000001.npy
-  │           ......
-  └─train
-      ├─inputs
-      │       000_00000001.png
-      │       ......     
-      ├─event
-      │       000_00000001.npy
-      │       ......
-      └─gt
-              000_00000001.png
-              ......               
-```
-
 ## Train
 
 ### Deblur
 ```shell
-python main.py --train --mode deblur 
+python train.py --mode deblur --TrainImgPath `Path of Train Image` --TrainEvePath `Path of Events` --TrainGTPath `Path of Ground Truth Image`
 ```
 ### SR
 ```shell
-python main.py --train --mode sr
+python train.py --mode sr --upsample_scale 4 --TrainImgPath `Path of Train Image` --TrainEvePath `Path of Events` --TrainGTPath `Path of Ground Truth Image`
 ```
 
 ## Test
+Pretrained model can be download in [PKU Disk](https://disk.pku.edu.cn:443/link/D94BD74A303AEFE04619BAC6917A09B7) or [Google Drive](https://drive.google.com/drive/folders/1_YKeGthyEPXYJtejYuEyHYlYtwo8y47u?usp=sharing), and copy to `pretrained` file folder.
 
 ### Deblur
 ```shell
-python main.py --mode deblur 
+python test.py --mode deblur --ckp pretrained/model_deblur_best.pth --TestImgPath demo_input/blur --TestEvePath demo_input/events
 ```
 ### SR
 ```shell
-python main.py --mode sr
+python test.py --mode sr --upsample_scale 4 --ckp pretrained/model_sr_best.pth --TestImgPath demo_input/lr --TestEvePath demo_input/events
 ```
 
 configurations can be changed in `utils/options.py`

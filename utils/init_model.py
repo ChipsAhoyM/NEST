@@ -1,3 +1,7 @@
+"""
+Code for intializing the model
+"""
+
 import torch
 import math
 

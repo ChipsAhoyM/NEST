@@ -6,18 +6,26 @@ import skimage.metrics
 from torch import optim
 from tqdm import tqdm
 from torch.utils.data import DataLoader, random_split
-
 from model import DeblurNet,SRNet,myVGG19
-from utils import Options, Dataset_Train, Logger, init_model
+from utils import Options, Dataset_Train, init_model
+import warnings
+warnings.filterwarnings('ignore')
+from tensorboardX import SummaryWriter
+
 
 args = Options().parse()
+
 if args.use_gpus:
     device = torch.device("cuda")
-    device_ids = [Id for Id in range(torch.cuda.device_count())]
 else:
     device = torch.device("cpu")
 vgg19 = myVGG19().to(device)
 vgg19.eval()
+
+job_time = time.strftime("%m_%d_%H_%M")
+path_log = os.path.join(args.LogPath, job_time)
+logger = SummaryWriter(path_log)
+os.makedirs(path_log, exist_ok=True)
 
 
 def loss(outputs, gt):
@@ -33,11 +41,11 @@ def loss(outputs, gt):
         p_f_loss += torch.mean(torch.sub(f_x, f_y) ** 2)
 
     content_loss = alpha * p_f_loss + beta * p_loss
-    return content_loss
+    return content_loss, p_f_loss, p_loss
 
 
 def make_dataset():
-    all_dataset = Dataset_Train(args.TrainImgPath, args.TrainEvePath, args.TrainGTPath, args.CropSize, args.mode)
+    all_dataset = Dataset_Train(args.TrainImgPath, args.TrainEvePath, args.TrainGTPath, args.CropSize, args.upsample_scale)
     val_size = int(len(all_dataset) * args.split_scale)
     train_dataset, val_dataset = random_split(all_dataset, [len(all_dataset) - val_size, val_size])
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
@@ -46,10 +54,6 @@ def make_dataset():
 
 
 def train():
-    job_time = time.strftime("%d_%m_%Y_%H_%M_%S")
-    path_log = os.path.join(args.LogPath, job_time)
-    logger = Logger(path_log, force=True)
-    os.makedirs(path_log, exist_ok=True)
     if args.mode == 'deblur':  
         model = DeblurNet()
     elif args.mode == 'sr':
@@ -57,8 +61,7 @@ def train():
     else:
         raise NotImplementedError('Model Error!')
         
-    if args.use_gpus:
-        model = torch.nn.DataParallel(model.cuda(), device_ids=device_ids, output_device=device_ids[0])
+    model = model.to(device)
     if args.load_weight:
         model.load_state_dict(torch.load(args.ckp, map_location='cpu'))
     else:
@@ -71,24 +74,28 @@ def train():
 
     train_loader, val_loader = make_dataset()
     bestPNSR = 0.0
+    
     for epoch in range(args.BegEpoch, args.NumEpoch + 1):
         epoch_loss = 0
-        with tqdm(total=len(train_loader), desc=f'Epoch {epoch}/{args.NumEpoch}', dynamic_ncols=True) as pbar:
-            for index, items in enumerate(train_loader):
-                imgs, event, gt = items
-                imgs = imgs.to(device)
-                event = event.to(device)
-                gt = gt.to(device)
+        mse_loss = 0
+        perc_loss = 0
 
+        with tqdm(total=len(train_loader), desc=f'Epoch {epoch}/{args.NumEpoch}', dynamic_ncols=True) as pbar:
+            for index, data in enumerate(train_loader):
+                imgs = data['input'].to(device)
+                event = data['ev'].to(device)
+                gt = data['gt'].to(device)
 
                 outs = model(imgs, event)
-                Loss = criterion(outs, gt)
+                Loss, p_f_loss, p_loss = criterion(outs, gt)
                 
                 optimizer.zero_grad()
                 Loss.backward()
                 optimizer.step()
 
                 epoch_loss += Loss.item()
+                mse_loss += p_loss.item()
+                perc_loss += p_f_loss.item()
                 pbar.set_postfix(**{'loss (batch)': Loss.item(), 'AveLoss': epoch_loss / (index + 1)})
                 pbar.update()
         torch.save(model.state_dict(), f'pretrained/model_{args.mode}_{epoch}.pth')
@@ -98,14 +105,17 @@ def train():
         if AvePSNR > bestPNSR:
             torch.save(model.state_dict(), f'pretrained/model_{args.mode}_best.pth')
             bestPNSR = AvePSNR
-        logger.add_scalar('validation psnr', AvePSNR)
-        logger.add_scalar('validation ssim', AveSSIM)
+        logger.add_scalar('Metric/val psnr', AvePSNR, epoch)
+        logger.add_scalar('Metric/val ssim', AveSSIM, epoch)
 
-        logger.add_scalar('loss', epoch_loss/len(train_loader))
-        logger.step()
+        logger.add_scalar('Loss/loss', epoch_loss/len(train_loader), epoch)
+        logger.add_scalar('Loss/mse_loss', mse_loss/len(train_loader), epoch)
+        logger.add_scalar('Loss/perc_loss', perc_loss/len(train_loader), epoch)
 
     return model
 
+def grayForShow(img):
+    return np.stack([img,img,img], axis=1)
 
 def validation(model, val_loader, epoch):
     model.eval()
@@ -114,18 +124,17 @@ def validation(model, val_loader, epoch):
 
     with torch.no_grad():
         with tqdm(total=len(val_loader), desc=f'Epoch {epoch} validation', dynamic_ncols=True) as pbar:
-            for index, items in enumerate(val_loader):
-                imgs, event, gt = items
-                imgs = imgs.to(device)
-                event = event.to(device)
+            for index, data in enumerate(val_loader):
+                y = data['input'].to(device)
+                event = data['ev'].to(device)
 
-                outs = model(imgs, event)
+                outs = model(y, event)
                 img_z = np.uint8(torch.squeeze(outs.cpu()).numpy())
-                gt = np.uint8(torch.squeeze(gt).numpy())
+                y_gt = np.uint8(torch.squeeze(data['gt']).numpy())
 
-                psnr = sum([skimage.metrics.peak_signal_noise_ratio(img_z[i, :, :], gt[i, :, :])
+                psnr = sum([skimage.metrics.peak_signal_noise_ratio(img_z[i, :, :], y_gt[i, :, :])
                             for i in range(img_z.shape[0])]) / img_z.shape[0]
-                ssim = sum([skimage.metrics.structural_similarity(img_z[i, :, :], gt[i, :, :])
+                ssim = sum([skimage.metrics.structural_similarity(img_z[i, :, :], y_gt[i, :, :])
                             for i in range(img_z.shape[0])]) / img_z.shape[0]
 
                 totally_psnr += psnr

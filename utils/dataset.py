@@ -1,3 +1,7 @@
+"""
+Code for reading the dataset
+"""
+
 import os
 import os.path
 import numpy as np
@@ -8,13 +12,16 @@ import glob
 import torch.utils.data as udata
 
 
-def read_img(img_path):
-    img = cv2.imread(img_path)
-    y, cr, cb = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb))
-    return y,cr,cb
-
+"""
+Dataset for training
+    ImgPath: path of input images
+    EvePath: path of events stack (N*H*W)
+    GTPath: path of ground truth images
+    CropSize: crop size
+    scale: scale factor
+"""
 class Dataset_Train(udata.Dataset):
-    def __init__(self, ImgPath, EvePath, GTPath, CropSize, mode):
+    def __init__(self, ImgPath, EvePath, GTPath, CropSize, scale = 1):
         super(Dataset_Train, self).__init__()
         self.imgList = sorted(glob.glob(os.path.join(ImgPath, '*.png')))
         self.eveList = sorted(glob.glob(os.path.join(EvePath, '*.npy')))
@@ -24,54 +31,61 @@ class Dataset_Train(udata.Dataset):
             raise ValueError("Data is unpaired!")
 
         self.CropSize = CropSize
-        self.mode = mode
+        self.scale = scale
 
     def __len__(self):
         return len(self.imgList)
 
-    @staticmethod
-    def MyRandomCrop(blur, sharp, events, CropSize):
+    def MyRandomCrop(self, input, gt, events):
+        """
+        Random crop for training
+        """
         (_, h, w) = events.shape
-        i = random.randint(0, h - CropSize - 1)
-        j = random.randint(0, w - CropSize - 1)
+        i = random.randint(0, h - self.CropSize - 1)
+        j = random.randint(0, w - self.CropSize - 1)
 
-        blur_patch = blur[i * 4:(i + CropSize) * 4, j * 4:(j + CropSize) * 4]
-        sharp_patch = sharp[i * 4:(i + CropSize) * 4, j * 4:(j + CropSize) * 4]
-        event_patch = events[:, i:i + CropSize, j:j + CropSize]
-        return blur_patch, sharp_patch, event_patch
-
-    @staticmethod
-    def MyRandomCrop2(blur, sharp, events, CropSize):
-        (h,w) = blur.shape
-        i = random.randint(0, h - CropSize - 1)
-        j = random.randint(0, w - CropSize - 1)
-
-        blur_patch = blur[i:i + CropSize, j:j + CropSize]
-        sharp_patch = sharp[i:i + CropSize, j:j + CropSize]
-        event_patch = events[:, i:i + CropSize, j:j + CropSize]
-        return blur_patch, sharp_patch, event_patch
+        input_patch = input[i:i+self.CropSize, j:j+self.CropSize]
+        gt_patch = gt[i * self.scale:(i + self.CropSize) * self.scale, j * self.scale:(j + self.CropSize) * self.scale]
+        event_patch = events[:, i:i + self.CropSize, j:j + self.CropSize]
+        return input_patch, gt_patch, event_patch
 
     def __getitem__(self, index):
         imgs = self.imgList[index]
         gts = self.gtList[index]
         ev = self.eveList[index]
 
-        imgs, _, _ = read_img(imgs)
-        gts, _, _ = read_img(gts)
+        imgs = cv2.imread(imgs, cv2.IMREAD_GRAYSCALE)
+        gts = cv2.imread(gts, cv2.IMREAD_GRAYSCALE)
         ev = np.load(ev, allow_pickle=True)
         
-        if self.mode == 'sr':
-            imgs, gts, ev = self.MyRandomCrop(imgs, gts, ev, self.CropSize)
-        else:
-            imgs, gts, ev = self.MyRandomCrop2(imgs, gts, ev, self.CropSize)
-        return torch.Tensor(np.expand_dims(imgs, 0)), torch.Tensor(ev), torch.Tensor(np.expand_dims(gts, 0))
+        imgs, gts, ev = self.MyRandomCrop(imgs, gts, ev)
 
+        input = torch.Tensor(np.expand_dims(imgs,axis=0))
+        gt = torch.Tensor(np.expand_dims(gts,axis=0))
+        ev = torch.Tensor(ev)
+        return {'input':input, 'ev':ev, 'gt':gt}
+
+"""
+Read the test images and transform to YCrCb color space
+"""
+def read_img(img_path):
+    img = cv2.imread(img_path)
+    y, cr, cb = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb))
+    return  np.array([y,cr,cb])
+
+
+"""
+Dataset for testing
+    ImgPath: path of input images
+    EvePath: path of events stack (N*H*W)
+"""
 class Dataset_Test(udata.Dataset):
-    def __init__(self, ImgPath, EvePath):
+    def __init__(self, ImgPath, EvePath, scale = 1):
         super(Dataset_Test, self).__init__()
         self.imgList = sorted(glob.glob(os.path.join(ImgPath, '*.png')))
         self.eveList = sorted(glob.glob(os.path.join(EvePath, '*.npy')))
-        print(len(self.imgList),len(self.eveList))
+        self.scale = scale
+
         if len(self.imgList) != len(self.eveList):
             raise ValueError("Data is unpaired!")
 
@@ -79,11 +93,11 @@ class Dataset_Test(udata.Dataset):
         return len(self.imgList)
 
     def __getitem__(self, index):
-        blurimg = self.imgList[index]
-        eveimg = self.eveList[index]
-        _, name = os.path.split(blurimg)
+        imgs = self.imgList[index]
+        ev = self.eveList[index]
+        _, name = os.path.split(imgs)
 
-        blur = read_img(blurimg)
-
-        events = np.float32(np.load(eveimg, allow_pickle=True))
-        return torch.Tensor(blur), torch.Tensor(events), name
+        input = read_img(imgs)
+        upsample_input = cv2.resize(input.transpose(1,2,0), (input.shape[2] * self.scale, input.shape[1] * self.scale), interpolation=cv2.INTER_CUBIC).transpose(2,0,1)
+        events = np.float32(np.load(ev, allow_pickle=True))
+        return {'input':torch.Tensor(input), 'ev':torch.Tensor(events), 'upsample':upsample_input, 'name':name[:-4]}
